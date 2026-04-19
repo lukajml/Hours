@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hourly — Employee Time Tracker</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; background: #0a0d0f; }
+    body { font-family: 'DM Mono', 'Courier New', monospace; }
+    #root { min-height: 100vh; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+    @keyframes fadeIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+    button:hover { opacity: 0.85; }
+    input:focus { border-color: #00e5a060 !important; outline: none; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #0a0d0f; }
+    ::-webkit-scrollbar-thumb { background: #1e2830; border-radius: 3px; }
+
+    /* Mobile nav scrollable */
+    .nav-scroll { display: flex; gap: 4px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .nav-scroll::-webkit-scrollbar { display: none; }
+
+    /* Responsive grid */
+    .emp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
+    .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 32px; }
+    .time-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+    .log-head { display: grid; grid-template-columns: 1.5fr 1fr 1fr 1.5fr 1fr; padding: 12px 20px; border-bottom: 1px solid #1e2830; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #8a9e90; font-weight: 700; }
+    .log-row { display: grid; grid-template-columns: 1.5fr 1fr 1fr 1.5fr 1fr; padding: 13px 20px; border-bottom: 1px solid #1e2830; font-size: 13px; align-items: center; }
+    .log-row:nth-child(even) { background: rgba(17,21,24,0.5); }
+
+    @media (max-width: 600px) {
+      .stats-grid { grid-template-columns: 1fr 1fr; }
+      .stats-grid .stat:last-child { grid-column: 1 / -1; }
+      .emp-grid { grid-template-columns: 1fr; }
+      .header-inner { flex-wrap: wrap; gap: 12px; padding: 14px 16px !important; }
+      .main-pad { padding: 16px !important; }
+      .log-head, .log-row { grid-template-columns: 1.5fr 1fr 1fr; font-size: 11px; padding: 10px 12px; }
+      .log-head span:nth-child(2),
+      .log-row span:nth-child(2),
+      .log-head span:nth-child(4),
+      .log-row span:nth-child(4) { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    const C = {
+      bg: "#0a0d0f", surface: "#111518", card: "#161c21", border: "#1e2830",
+      accent: "#00e5a0", accentDim: "#00e5a018", accentMid: "#00e5a060",
+      warn: "#ff6b35", warnDim: "#ff6b3518",
+      text: "#e8f0ea", textMid: "#8a9e90",
+    };
+
+    const INIT_EMPLOYEES = [
+      { id: 1, name: "Aria Chen",    role: "Engineering", color: "#00e5a0" },
+      { id: 2, name: "Marcus Webb",  role: "Design",      color: "#4facfe" },
+      { id: 3, name: "Sofia Reyes",  role: "Product",     color: "#f093fb" },
+    ];
+    const PALETTES = ["#00e5a0","#4facfe","#f093fb","#ffd166","#ff6b35","#a8edea","#c471ed"];
+
+    function fmt(ms) {
+      if (!ms || ms < 0) return "0h 00m";
+      const s = Math.floor(ms / 1000);
+      return `${Math.floor(s/3600)}h ${String(Math.floor((s%3600)/60)).padStart(2,"0")}m`;
+    }
+    function fmtTime(ts) {
+      if (!ts) return "--:--";
+      return new Date(ts).toLocaleTimeString([], { hour:"2-digit", minute:"2-digit" });
+    }
+    function fmtDate(ts) {
+      return new Date(ts).toLocaleDateString([], { month:"short", day:"numeric" });
+    }
+
+    function Clock() {
+      const [t, setT] = useState(new Date());
+      useEffect(() => { const i = setInterval(() => setT(new Date()), 1000); return () => clearInterval(i); }, []);
+      return <span style={{fontVariantNumeric:"tabular-nums"}}>{t.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit",second:"2-digit"})}</span>;
+    }
+
+    function LiveTimer({ from }) {
+      const [el, setEl] = useState(Date.now() - from);
+      useEffect(() => { const i = setInterval(() => setEl(Date.now() - from), 1000); return () => clearInterval(i); }, [from]);
+      return <span style={{fontVariantNumeric:"tabular-nums"}}>{fmt(el)}</span>;
+    }
+
+    function App() {
+      const [employees, setEmployees] = useState(INIT_EMPLOYEES);
+      const [sessions, setSessions]   = useState({});
+      const [active, setActive]       = useState({});
+      const [view, setView]           = useState("dashboard");
+      const [newEmp, setNewEmp]       = useState({ name: "", role: "" });
+
+      const clockIn  = id => setActive(a => ({ ...a, [id]: Date.now() }));
+      const clockOut = id => {
+        const start = active[id]; if (!start) return;
+        const end = Date.now();
+        setSessions(s => ({ ...s, [id]: [...(s[id]||[]), { start, end, date: new Date().toDateString() }] }));
+        setActive(a => { const n={...a}; delete n[id]; return n; });
+      };
+
+      const todayMs = id => (sessions[id]||[]).filter(s => s.date === new Date().toDateString()).reduce((a,s)=>a+(s.end-s.start),0);
+      const weekMs  = id => (sessions[id]||[]).reduce((a,s)=>a+(s.end-s.start),0);
+
+      const addEmp = () => {
+        if (!newEmp.name.trim()) return;
+        const id = Date.now();
+        setEmployees(e => [...e, { id, name: newEmp.name.trim(), role: newEmp.role.trim()||"—", color: PALETTES[e.length % PALETTES.length] }]);
+        setNewEmp({ name:"", role:"" });
+        setView("dashboard");
+      };
+
+      const removeEmp = id => {
+        setEmployees(e => e.filter(x => x.id !== id));
+        setSessions(s => { const n={...s}; delete n[id]; return n; });
+        setActive(a => { const n={...a}; delete n[id]; return n; });
+      };
+
+      const allLogs = employees.flatMap(emp => (sessions[emp.id]||[]).map(s=>({...s,emp}))).sort((a,b)=>b.start-a.start);
+      const activeCount = Object.keys(active).length;
+
+      // ── Styles ──
+      const S = {
+        root:    { minHeight:"100vh", background:C.bg, color:C.text, fontFamily:"'DM Mono','Courier New',monospace", display:"flex", flexDirection:"column" },
+        header:  { borderBottom:`1px solid ${C.border}`, background:C.surface, position:"sticky", top:0, zIndex:100 },
+        hInner:  { padding:"16px 32px", display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:12 },
+        logo:    { display:"flex", alignItems:"center", gap:10 },
+        mark:    { width:30, height:30, background:C.accent, borderRadius:6, display:"flex", alignItems:"center", justifyContent:"center", fontSize:15, fontWeight:700, color:C.bg, flexShrink:0 },
+        logoTxt: { fontSize:13, fontWeight:700, letterSpacing:"0.14em", textTransform:"uppercase", color:C.text },
+        clk:     { fontSize:12, color:C.accent, letterSpacing:"0.08em", display:"flex", alignItems:"center", gap:7 },
+        dot:     { width:6, height:6, borderRadius:"50%", background:C.accent, animation:"pulse 2s infinite", flexShrink:0 },
+        navBtn:  (on) => ({ padding:"6px 14px", borderRadius:4, border:"none", cursor:"pointer", fontSize:11, letterSpacing:"0.08em", textTransform:"uppercase", fontFamily:"inherit", fontWeight:700, background:on?C.accentDim:"transparent", color:on?C.accent:C.textMid, transition:"all 0.2s", whiteSpace:"nowrap" }),
+        main:    { flex:1, padding:"28px 32px", maxWidth:1100, margin:"0 auto", width:"100%" },
+        stat:    { background:C.card, border:`1px solid ${C.border}`, borderRadius:10, padding:"18px 22px" },
+        statLbl: { fontSize:10, letterSpacing:"0.14em", textTransform:"uppercase", color:C.textMid, marginBottom:8 },
+        statVal: { fontSize:26, fontWeight:700, color:C.accent, lineHeight:1 },
+        secTitle:{ fontSize:10, letterSpacing:"0.16em", textTransform:"uppercase", color:C.textMid, marginBottom:20, display:"flex", alignItems:"center", gap:10 },
+        line:    { flex:1, height:1, background:C.border },
+        card:    (on) => ({ background:C.card, border:`1px solid ${on?C.accentMid:C.border}`, borderRadius:12, padding:22, position:"relative", overflow:"hidden", transition:"border-color 0.3s" }),
+        glow:    (col) => ({ position:"absolute", top:0, left:0, right:0, height:2, background:col, borderRadius:"12px 12px 0 0" }),
+        empHdr:  { display:"flex", alignItems:"center", gap:11, marginBottom:18 },
+        avatar:  (col) => ({ width:38, height:38, borderRadius:8, background:col+"28", border:`1px solid ${col}55`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:16, color:col, fontWeight:700, flexShrink:0 }),
+        empName: { fontSize:14, fontWeight:600, color:C.text, lineHeight:1.2 },
+        empRole: { fontSize:10, color:C.textMid, letterSpacing:"0.09em", textTransform:"uppercase", marginTop:3 },
+        badge:   (on) => ({ marginLeft:"auto", padding:"3px 9px", borderRadius:20, fontSize:10, letterSpacing:"0.1em", textTransform:"uppercase", fontWeight:700, background:on?C.accentDim:C.warnDim, color:on?C.accent:C.textMid, border:`1px solid ${on?C.accentMid:C.border}`, whiteSpace:"nowrap" }),
+        cell:    { background:C.surface, borderRadius:8, padding:"11px 13px", border:`1px solid ${C.border}` },
+        cellLbl: { fontSize:10, letterSpacing:"0.1em", textTransform:"uppercase", color:C.textMid, marginBottom:4 },
+        cellVal: (acc) => ({ fontSize:acc?17:13, fontWeight:acc?700:500, color:acc?C.accent:C.text }),
+        btnRow:  { display:"flex", gap:8 },
+        btn:     (v) => ({ flex:1, padding:"10px 0", borderRadius:8, border:"none", cursor:"pointer", fontSize:11, letterSpacing:"0.1em", textTransform:"uppercase", fontFamily:"inherit", fontWeight:700, background:v==="primary"?C.accent:v==="danger"?C.warnDim:C.accentDim, color:v==="primary"?C.bg:v==="danger"?C.warn:C.accent, transition:"all 0.15s" }),
+        form:    { background:C.card, border:`1px solid ${C.border}`, borderRadius:12, padding:28, maxWidth:460, margin:"0 auto" },
+        label:   { fontSize:10, letterSpacing:"0.13em", textTransform:"uppercase", color:C.textMid, marginBottom:8, display:"block" },
+        input:   { width:"100%", padding:"11px 14px", background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, color:C.text, fontSize:13, fontFamily:"inherit", marginBottom:18 },
+        logWrap: { background:C.card, border:`1px solid ${C.border}`, borderRadius:12, overflow:"hidden" },
+        empty:   { textAlign:"center", color:C.textMid, padding:"70px 0", fontSize:13 },
+      };
+
+      return (
+        <div style={S.root}>
+          {/* ── Header ── */}
+          <header style={S.header}>
+            <div style={S.hInner} className="header-inner">
+              <div style={S.logo}>
+                <div style={S.mark}>H</div>
+                <span style={S.logoTxt}>Hourly</span>
+              </div>
+              <div style={S.clk}>
+                <div style={S.dot}></div>
+                <Clock />
+              </div>
+              <div className="nav-scroll">
+                <button style={S.navBtn(view==="dashboard")} onClick={()=>setView("dashboard")}>Dashboard</button>
+                <button style={S.navBtn(view==="log")}       onClick={()=>setView("log")}>Log</button>
+                <button style={S.navBtn(view==="add")}       onClick={()=>setView("add")}>+ Employee</button>
+              </div>
+            </div>
+          </header>
+
+          {/* ── Main ── */}
+          <main style={S.main} className="main-pad">
+
+            {/* DASHBOARD */}
+            {view === "dashboard" && (
+              <div style={{animation:"fadeIn 0.3s ease"}}>
+                <div className="stats-grid">
+                  {[["Active Now", activeCount],["Total Employees", employees.length],["Sessions Today", allLogs.filter(l=>l.date===new Date().toDateString()).length]].map(([lbl,val])=>(
+                    <div key={lbl} style={S.stat}>
+                      <div style={S.statLbl}>{lbl}</div>
+                      <div style={S.statVal}>{val}</div>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={S.secTitle}><span>Employees</span><div style={S.line}></div></div>
+
+                <div className="emp-grid">
+                  {employees.map(emp => {
+                    const on = !!active[emp.id];
+                    const last = (sessions[emp.id]||[]).slice(-1)[0];
+                    return (
+                      <div key={emp.id} style={S.card(on)}>
+                        <div style={S.glow(emp.color)}></div>
+                        <div style={S.empHdr}>
+                          <div style={S.avatar(emp.color)}>{emp.name[0]}</div>
+                          <div>
+                            <div style={S.empName}>{emp.name}</div>
+                            <div style={S.empRole}>{emp.role}</div>
+                          </div>
+                          <div style={S.badge(on)}>{on ? "● Active" : "Offline"}</div>
+                        </div>
+
+                        <div className="time-grid">
+                          <div style={S.cell}>
+                            <div style={S.cellLbl}>Today</div>
+                            <div style={S.cellVal(true)}>
+                              {on ? <LiveTimer from={active[emp.id] - todayMs(emp.id)} /> : fmt(todayMs(emp.id))}
+                            </div>
+                          </div>
+                          <div style={S.cell}>
+                            <div style={S.cellLbl}>This Week</div>
+                            <div style={S.cellVal(false)}>
+                              {on ? <LiveTimer from={active[emp.id] - weekMs(emp.id)} /> : fmt(weekMs(emp.id))}
+                            </div>
+                          </div>
+                          <div style={S.cell}>
+                            <div style={S.cellLbl}>Clock In</div>
+                            <div style={S.cellVal(false)}>{on ? fmtTime(active[emp.id]) : (last ? fmtTime(last.start) : "—")}</div>
+                          </div>
+                          <div style={S.cell}>
+                            <div style={S.cellLbl}>Clock Out</div>
+                            <div style={S.cellVal(false)}>{on ? "—" : (last ? fmtTime(last.end) : "—")}</div>
+                          </div>
+                        </div>
+
+                        <div style={S.btnRow}>
+                          {!on
+                            ? <button style={S.btn("primary")}    onClick={()=>clockIn(emp.id)}>Clock In</button>
+                            : <button style={S.btn("secondary")}  onClick={()=>clockOut(emp.id)}>Clock Out</button>
+                          }
+                          <button style={{...S.btn("danger"), flex:"0 0 40px"}} onClick={()=>removeEmp(emp.id)} title="Remove">✕</button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* LOG */}
+            {view === "log" && (
+              <div style={{animation:"fadeIn 0.3s ease"}}>
+                <div style={S.secTitle}>
+                  <span>Session Log</span><div style={S.line}></div>
+                  <span>{allLogs.length} entries</span>
+                </div>
+                {allLogs.length === 0
+                  ? <div style={S.empty}>No sessions yet. Clock someone in first.</div>
+                  : (
+                    <div style={S.logWrap}>
+                      <div className="log-head">
+                        <span>Employee</span><span>Role</span><span>Date</span><span>In → Out</span><span>Duration</span>
+                      </div>
+                      {allLogs.map((log, i) => (
+                        <div key={i} className="log-row">
+                          <div style={{display:"flex",alignItems:"center",gap:8}}>
+                            <div style={{width:7,height:7,borderRadius:"50%",background:log.emp.color,flexShrink:0}}></div>
+                            <span>{log.emp.name}</span>
+                          </div>
+                          <span style={{color:C.textMid}}>{log.emp.role}</span>
+                          <span style={{color:C.textMid}}>{fmtDate(log.start)}</span>
+                          <span style={{color:C.textMid}}>{fmtTime(log.start)} → {fmtTime(log.end)}</span>
+                          <span style={{color:C.accent,fontWeight:600}}>{fmt(log.end-log.start)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )
+                }
+              </div>
+            )}
+
+            {/* ADD */}
+            {view === "add" && (
+              <div style={{animation:"fadeIn 0.3s ease"}}>
+                <div style={S.secTitle}><span>Add Employee</span><div style={S.line}></div></div>
+                <div style={S.form}>
+                  <label style={S.label}>Full Name</label>
+                  <input style={S.input} placeholder="e.g. Jordan Taylor"
+                    value={newEmp.name}
+                    onChange={e=>setNewEmp(n=>({...n,name:e.target.value}))}
+                    onKeyDown={e=>e.key==="Enter"&&addEmp()} />
+                  <label style={S.label}>Department / Role</label>
+                  <input style={S.input} placeholder="e.g. Engineering, Sales"
+                    value={newEmp.role}
+                    onChange={e=>setNewEmp(n=>({...n,role:e.target.value}))}
+                    onKeyDown={e=>e.key==="Enter"&&addEmp()} />
+                  <button style={{...S.btn("primary"), width:"100%", padding:"13px 0", fontSize:12}} onClick={addEmp}>
+                    Add Employee
+                  </button>
+                </div>
+              </div>
+            )}
+          </main>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
