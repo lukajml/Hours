@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hourly — Restaurant Tracker</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    html,body{height:100%;background:#0a0d0f}
+    body{font-family:'DM Mono','Courier New',monospace}
+    #root{min-height:100vh}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
+    @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+    button:hover{opacity:.85}
+    input:focus,select:focus{border-color:#00e5a060!important;outline:none}
+    ::-webkit-scrollbar{width:6px}
+    ::-webkit-scrollbar-track{background:#0a0d0f}
+    ::-webkit-scrollbar-thumb{background:#1e2830;border-radius:3px}
+    .nav-scroll{display:flex;gap:4px;overflow-x:auto;-webkit-overflow-scrolling:touch}
+    .nav-scroll::-webkit-scrollbar{display:none}
+    .emp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:16px}
+    .stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:28px}
+    .time-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
+    .tbl-head,.tbl-row{display:grid;padding:12px 20px;border-bottom:1px solid #1e2830;align-items:center}
+    .tbl-head{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#8a9e90;font-weight:700}
+    .tbl-row{font-size:12px}
+    .tbl-row:nth-child(even){background:rgba(17,21,24,.5)}
+    .log-cols  {grid-template-columns:1.4fr 1fr .8fr 1.2fr .8fr .8fr}
+    .pay-cols  {grid-template-columns:1.4fr 1fr 1fr 1fr 1fr 1fr}
+    .month-cols{grid-template-columns:1.4fr 1fr 1fr 1fr 1fr}
+    .req-cols  {grid-template-columns:1.4fr 1fr 1fr 1fr .8fr}
+    @media(max-width:700px){
+      .stats-grid{grid-template-columns:1fr 1fr}
+      .emp-grid{grid-template-columns:1fr}
+      .header-inner{flex-wrap:wrap;gap:10px;padding:12px 14px!important}
+      .main-pad{padding:14px!important}
+      .log-cols,.pay-cols,.month-cols,.req-cols{grid-template-columns:1.3fr .9fr .9fr;font-size:11px;padding:10px 12px}
+      .log-cols  span:nth-child(3),.log-cols   span:nth-child(5),
+      .pay-cols  span:nth-child(4),.pay-cols   span:nth-child(6),
+      .month-cols span:nth-child(4),
+      .req-cols  span:nth-child(4){display:none}
+    }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useCallback } = React;
+
+/* ── colours ── */
+const C = {
+  bg:"#0a0d0f",surface:"#111518",card:"#161c21",border:"#1e2830",
+  accent:"#00e5a0",accentDim:"#00e5a018",accentMid:"#00e5a060",
+  warn:"#ff6b35",warnDim:"#ff6b3522",warnMid:"#ff6b3580",
+  gold:"#ffd166",goldDim:"#ffd16618",
+  blue:"#4facfe",blueDim:"#4facfe18",
+  text:"#e8f0ea",textMid:"#8a9e90",
+};
+
+const ROLES      = ["Kitchen","Front of House","Bar","Manager","Host","Delivery"];
+const PALETTES   = ["#00e5a0","#4facfe","#f093fb","#ffd166","#ff6b35","#a8edea","#c471ed","#06d6a0","#ef476f"];
+const ROLE_CLR   = {"Kitchen":"#ff6b35","Front of House":"#4facfe","Bar":"#f093fb","Manager":"#ffd166","Host":"#a8edea","Delivery":"#c471ed"};
+const OT_MS      = 40*3600*1000;
+const MONTHS     = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+const INIT_EMPS  = [
+  {id:1,name:"Aria Chen",  role:"Kitchen",       color:"#00e5a0",rate:15},
+  {id:2,name:"Marcus Webb",role:"Front of House",color:"#4facfe",rate:13},
+  {id:3,name:"Sofia Reyes",role:"Bar",           color:"#f093fb",rate:14},
+];
+
+/* ── helpers ── */
+const fmt     = ms=>{ if(!ms||ms<0) return "0h 00m"; const s=Math.floor(ms/1000); return `${Math.floor(s/3600)}h ${String(Math.floor((s%3600)/60)).padStart(2,"0")}m`; };
+const fmtTime = ts=>{ if(!ts) return "--:--"; return new Date(ts).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}); };
+const fmtDate = ts=>new Date(ts).toLocaleDateString([],{month:"short",day:"numeric"});
+const toH     = ms=>ms/3600000;
+const money   = n=>"$"+n.toFixed(2);
+const todayStr= ()=>new Date().toDateString();
+const weekStart=()=>{ const d=new Date(); d.setDate(d.getDate()-d.getDay()); d.setHours(0,0,0,0); return d.getTime(); };
+
+/* ── localStorage persistence ── */
+function usePersist(key,init){
+  const [val,setVal]=useState(()=>{
+    try{ const s=localStorage.getItem(key); return s?JSON.parse(s):init; }catch{ return init; }
+  });
+  useEffect(()=>{ try{ localStorage.setItem(key,JSON.stringify(val)); }catch{} },[key,val]);
+  return [val,setVal];
+}
+
+/* ── Tip Modal ── */
+function TipModal({emp,onSave,onSkip}){
+  const [amt,setAmt]=useState("");
+  const save=()=>{ const n=parseFloat(amt); onSave(isNaN(n)||n<0?0:n); };
+  const ov={position:"fixed",inset:0,background:"#000c",zIndex:999,display:"flex",alignItems:"center",justifyContent:"center",padding:20};
+  const box={background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:28,width:"100%",maxWidth:360,animation:"fadeIn 0.2s ease"};
+  return(
+    <div style={ov}>
+      <div style={box}>
+        <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:6}}>Log Tips 💰</div>
+        <div style={{fontSize:11,color:C.textMid,marginBottom:20}}>Tips for <b style={{color:C.text}}>{emp.name}</b> this session</div>
+        <label style={{fontSize:10,letterSpacing:".12em",textTransform:"uppercase",color:C.textMid,marginBottom:8,display:"block"}}>Amount ($)</label>
+        <input autoFocus type="number" min="0" step="0.01" placeholder="0.00"
+          style={{width:"100%",padding:"12px 14px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,fontSize:18,fontFamily:"inherit",marginBottom:18}}
+          value={amt} onChange={e=>setAmt(e.target.value)} onKeyDown={e=>e.key==="Enter"&&save()}/>
+        <div style={{display:"flex",gap:10}}>
+          <button onClick={onSkip} style={{flex:1,padding:"10px 0",borderRadius:8,border:"none",cursor:"pointer",fontSize:11,letterSpacing:".1em",textTransform:"uppercase",fontFamily:"inherit",fontWeight:700,background:C.surface,color:C.textMid}}>No Tips</button>
+          <button onClick={save}   style={{flex:1,padding:"10px 0",borderRadius:8,border:"none",cursor:"pointer",fontSize:11,letterSpacing:".1em",textTransform:"uppercase",fontFamily:"inherit",fontWeight:700,background:C.gold,color:C.bg}}>Save Tips</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Main App ── */
+function App(){
+  const [employees,setEmployees] = usePersist("hourly_emps",  INIT_EMPS);
+  const [sessions, setSessions]  = usePersist("hourly_sess",  {});
+  const [requests, setRequests]  = usePersist("hourly_reqs",  []);
+  const [active,   setActive]    = usePersist("hourly_active",{});
+  const [view,     setView]      = useState("dashboard");
+  const [newEmp,   setNewEmp]    = useState({name:"",role:ROLES[0],rate:""});
+  const [newReq,   setNewReq]    = useState({empId:"",from:"",to:"",reason:""});
+  const [tipModal, setTipModal]  = useState(null);
+  const [monthSel, setMonthSel]  = useState(new Date().getMonth());
+  const [yearSel,  setYearSel]   = useState(new Date().getFullYear());
+
+  /* fix: resume active sessions after reload — cap at 12h to avoid runaway timers */
+  useEffect(()=>{
+    const now=Date.now();
+    const MAX=12*3600*1000;
+    setActive(a=>{
+      const cleaned={};
+      Object.entries(a).forEach(([id,ts])=>{ if(now-ts<MAX) cleaned[id]=ts; });
+      return cleaned;
+    });
+  },[]);
+
+  /* ── clock ops ── */
+  const clockIn  = id=>setActive(a=>({...a,[id]:Date.now()}));
+  const clockOut = id=>setTipModal(id);
+  const finishOut= (id,tips)=>{
+    const start=active[id]; if(!start) return;
+    const end=Date.now();
+    setSessions(s=>({...s,[id]:[...(s[id]||[]),{start,end,date:todayStr(),tips:tips||0}]}));
+    setActive(a=>{ const n={...a}; delete n[id]; return n; });
+    setTipModal(null);
+  };
+
+  /* ── calculations ── */
+  const weekMs  = id=>(sessions[id]||[]).filter(s=>s.start>=weekStart()).reduce((a,s)=>a+(s.end-s.start),0);
+  const todayMs = id=>(sessions[id]||[]).filter(s=>s.date===todayStr()).reduce((a,s)=>a+(s.end-s.start),0);
+  const totalTips=id=>(sessions[id]||[]).reduce((a,s)=>a+(s.tips||0),0);
+  const monthMs =(id,m,y)=>(sessions[id]||[]).filter(s=>{ const d=new Date(s.start); return d.getMonth()===m&&d.getFullYear()===y; }).reduce((a,s)=>a+(s.end-s.start),0);
+  const monthTips=(id,m,y)=>(sessions[id]||[]).filter(s=>{ const d=new Date(s.start); return d.getMonth()===m&&d.getFullYear()===y; }).reduce((a,s)=>a+(s.tips||0),0);
+  const isOT    = id=>weekMs(id)+(active[id]?Date.now()-active[id]:0)>=OT_MS;
+  const nearOT  = id=>{ const w=weekMs(id)+(active[id]?Date.now()-active[id]:0); return w>=OT_MS*.9&&w<OT_MS; };
+
+  /* ── payroll calc ── */
+  const payCalc=(emp,ms)=>{
+    const h=toH(ms); const reg=Math.min(h,40); const ot=Math.max(0,h-40);
+    return {reg,ot,regPay:reg*emp.rate,otPay:ot*emp.rate*1.5};
+  };
+
+  /* ── add/remove employee ── */
+  const addEmp=()=>{
+    if(!newEmp.name.trim()) return;
+    const id=Date.now();
+    setEmployees(e=>[...e,{id,name:newEmp.name.trim(),role:newEmp.role,color:PALETTES[e.length%PALETTES.length],rate:parseFloat(newEmp.rate)||13}]);
+    setNewEmp({name:"",role:ROLES[0],rate:""});
+    setView("dashboard");
+  };
+  const removeEmp=id=>{
+    setEmployees(e=>e.filter(x=>x.id!==id));
+    setSessions(s=>{ const n={...s}; delete n[id]; return n; });
+    setActive(a=>{ const n={...a}; delete n[id]; return n; });
+  };
+
+  /* ── day off requests ── */
+  const submitReq=()=>{
+    if(!newReq.empId||!newReq.from||!newReq.to) return;
+    setRequests(r=>[...r,{id:Date.now(),...newReq,status:"pending",submitted:Date.now()}]);
+    setNewReq({empId:"",from:"",to:"",reason:""});
+  };
+  const updateReq=(id,status)=>setRequests(r=>r.map(x=>x.id===id?{...x,status}:x));
+  const deleteReq=id=>setRequests(r=>r.filter(x=>x.id!==id));
+
+  /* ── CSV export (payroll) ── */
+  const exportCSV=()=>{
+    const rows=[["Employee","Role","Rate","Reg Hours","OT Hours","Reg Pay","OT Pay","Tips","Total"]];
+    employees.forEach(emp=>{
+      const ms=weekMs(emp.id); const {reg,ot,regPay,otPay}=payCalc(emp,ms); const tips=totalTips(emp.id);
+      rows.push([emp.name,emp.role,`$${emp.rate}`,reg.toFixed(2),ot.toFixed(2),money(regPay),money(otPay),money(tips),money(regPay+otPay+tips)]);
+    });
+    const csv=rows.map(r=>r.join(",")).join("\n");
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));
+    a.download=`payroll-${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+  };
+
+  /* ── month CSV export ── */
+  const exportMonthCSV=()=>{
+    const rows=[["Employee","Role","Hours","Tips","Reg Pay","OT Pay","Total"]];
+    employees.forEach(emp=>{
+      const ms=monthMs(emp.id,monthSel,yearSel);
+      const {reg,ot,regPay,otPay}=payCalc(emp,ms);
+      const tips=monthTips(emp.id,monthSel,yearSel);
+      rows.push([emp.name,emp.role,toH(ms).toFixed(2),money(tips),money(regPay),money(otPay),money(regPay+otPay+tips)]);
+    });
+    const csv=rows.map(r=>r.join(",")).join("\n");
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));
+    a.download=`monthly-${MONTHS[monthSel]}-${yearSel}.csv`;
+    a.click();
+  };
+
+  const allLogs=employees.flatMap(emp=>(sessions[emp.id]||[]).map(s=>({...s,emp}))).sort((a,b)=>b.start-a.start);
+  const activeCount=Object.keys(active).length;
+  const otCount=employees.filter(e=>isOT(e.id)).length;
+  const pendingReqs=requests.filter(r=>r.status==="pending").length;
+
+  /* ── shared style helpers ── */
+  const btn=(v)=>({flex:1,padding:"9px 0",borderRadius:8,border:"none",cursor:"pointer",fontSize:11,letterSpacing:".1em",textTransform:"uppercase",fontFamily:"inherit",fontWeight:700,
+    background:v==="primary"?C.accent:v==="danger"?C.warnDim:v==="gold"?C.goldDim:v==="blue"?C.blueDim:C.accentDim,
+    color:v==="primary"?C.bg:v==="danger"?C.warn:v==="gold"?C.gold:v==="blue"?C.blue:C.accent});
+  const navBtn=(on)=>({padding:"6px 13px",borderRadius:4,border:"none",cursor:"pointer",fontSize:11,letterSpacing:".08em",textTransform:"uppercase",fontFamily:"inherit",fontWeight:700,
+    background:on?C.accentDim:"transparent",color:on?C.accent:C.textMid,transition:"all .2s",whiteSpace:"nowrap"});
+  const inputSt={width:"100%",padding:"10px 13px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,fontSize:13,fontFamily:"inherit",marginBottom:16};
+  const selectSt={...inputSt,appearance:"none"};
+  const label={fontSize:10,letterSpacing:".13em",textTransform:"uppercase",color:C.textMid,marginBottom:8,display:"block"};
+  const secTitle={fontSize:10,letterSpacing:".16em",textTransform:"uppercase",color:C.textMid,marginBottom:18,display:"flex",alignItems:"center",gap:10};
+  const line={flex:1,height:1,background:C.border};
+  const tblWrap={background:C.card,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden"};
+  const empty={textAlign:"center",color:C.textMid,padding:"60px 0",fontSize:13};
+  const exportBtn={padding:"7px 16px",borderRadius:8,border:`1px solid ${C.accentMid}`,cursor:"pointer",fontSize:11,letterSpacing:".1em",textTransform:"uppercase",fontFamily:"inherit",fontWeight:700,background:C.accentDim,color:C.accent};
+
+  return(
+    <div style={{minHeight:"100vh",background:C.bg,color:C.text,fontFamily:"'DM Mono','Courier New',monospace",display:"flex",flexDirection:"column"}}>
+
+      {/* tip modal */}
+      {tipModal!==null&&(
+        <TipModal emp={employees.find(e=>e.id===tipModal)||{name:""}}
+          onSave={tips=>finishOut(tipModal,tips)}
+          onSkip={()=>finishOut(tipModal,0)}/>
+      )}
+
+      {/* ── header ── */}
+      <header style={{borderBottom:`1px solid ${C.border}`,background:C.surface,position:"sticky",top:0,zIndex:100}}>
+        <div className="header-inner" style={{padding:"14px 28px",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:10}}>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <div style={{width:30,height:30,background:C.accent,borderRadius:6,display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,fontWeight:700,color:C.bg}}>H</div>
+            <span style={{fontSize:13,fontWeight:700,letterSpacing:".14em",textTransform:"uppercase"}}>Hourly</span>
+          </div>
+          <div style={{fontSize:12,color:C.accent,display:"flex",alignItems:"center",gap:7}}>
+            <div style={{width:6,height:6,borderRadius:"50%",background:C.accent,animation:"pulse 2s infinite"}}></div>
+            <span style={{fontVariantNumeric:"tabular-nums"}}><Clock/></span>
+          </div>
+          <div className="nav-scroll">
+            {[["dashboard","Dashboard"],["log","Log"],["payroll","Payroll"],["monthly","Monthly"],["requests","Requests"+(pendingReqs?` (${pendingReqs})`:"")],["add","+ Staff"]].map(([v,lbl])=>(
+              <button key={v} style={navBtn(view===v)} onClick={()=>setView(v)}>{lbl}</button>
+            ))}
+          </div>
+        </div>
+      </header>
+
+      {/* ── main ── */}
+      <main className="main-pad" style={{flex:1,padding:"24px 28px",maxWidth:1200,margin:"0 auto",width:"100%"}}>
+
+        {/* ════ DASHBOARD ════ */}
+        {view==="dashboard"&&(
+          <div style={{animation:"fadeIn .3s ease"}}>
+            <div className="stats-grid">
+              {[
+                ["Active Now",activeCount,false],
+                ["Total Staff",employees.length,false],
+                ["Overtime ⚠",otCount,otCount>0],
+                ["Pending Requests",pendingReqs,pendingReqs>0],
+              ].map(([lbl,val,warn])=>(
+                <div key={lbl} style={{background:C.card,border:`1px solid ${warn?C.warnMid:C.border}`,borderRadius:10,padding:"16px 20px"}}>
+                  <div style={{fontSize:10,letterSpacing:".14em",textTransform:"uppercase",color:C.textMid,marginBottom:8}}>{lbl}</div>
+                  <div style={{fontSize:24,fontWeight:700,color:warn?C.warn:C.accent,lineHeight:1}}>{val}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={secTitle}><span>Staff</span><div style={line}></div></div>
+
+            <div className="emp-grid">
+              {employees.map(emp=>{
+                const on=!!active[emp.id];
+                const ot=isOT(emp.id); const aot=nearOT(emp.id);
+                const last=(sessions[emp.id]||[]).slice(-1)[0];
+                const wkMs=weekMs(emp.id)+(on?Date.now()-active[emp.id]:0);
+                const tips=totalTips(emp.id);
+                return(
+                  <div key={emp.id} style={{background:C.card,border:`1px solid ${ot?C.warnMid:on?C.accentMid:C.border}`,borderRadius:12,padding:20,position:"relative",overflow:"hidden",transition:"border-color .3s"}}>
+                    <div style={{position:"absolute",top:0,left:0,right:0,height:2,background:ot?C.warn:emp.color,borderRadius:"12px 12px 0 0"}}></div>
+
+                    {(ot||aot)&&(
+                      <div style={{background:C.warnDim,border:`1px solid ${C.warnMid}`,borderRadius:8,padding:"7px 11px",marginBottom:12,fontSize:11,color:C.warn,fontWeight:600}}>
+                        ⚠ {ot?"Overtime — over 40h this week":"Approaching 40h limit"}
+                      </div>
+                    )}
+
+                    <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
+                      <div style={{width:36,height:36,borderRadius:8,background:emp.color+"28",border:`1px solid ${emp.color}55`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,color:emp.color,fontWeight:700,flexShrink:0}}>{emp.name[0]}</div>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:13,fontWeight:700,color:C.text}}>{emp.name}</div>
+                        <div style={{fontSize:10,color:ROLE_CLR[emp.role]||C.textMid,letterSpacing:".09em",textTransform:"uppercase",marginTop:2,fontWeight:600}}>{emp.role} · ${emp.rate}/h</div>
+                      </div>
+                      <div style={{padding:"3px 9px",borderRadius:20,fontSize:10,letterSpacing:".1em",textTransform:"uppercase",fontWeight:700,background:ot?C.warnDim:on?C.accentDim:"#ffffff08",color:ot?C.warn:on?C.accent:C.textMid,border:`1px solid ${ot?C.warnMid:on?C.accentMid:C.border}`,whiteSpace:"nowrap"}}>
+                        {ot?"⚠ OT":on?"● Active":"Offline"}
+                      </div>
+                    </div>
+
+                    <div className="time-grid">
+                      {[
+                        ["Today",   on?<LiveTimer from={active[emp.id]-todayMs(emp.id)}/>:fmt(todayMs(emp.id)), true, false],
+                        ["Week",    on?<LiveTimer from={active[emp.id]-weekMs(emp.id)}/>:fmt(wkMs), true, ot],
+                        ["Clock In",on?fmtTime(active[emp.id]):(last?fmtTime(last.start):"—"), false, false],
+                        ["Tips 💰", money(tips), false, false, true],
+                      ].map(([lbl,val,acc,warn,gold])=>(
+                        <div key={lbl} style={{background:C.surface,borderRadius:8,padding:"10px 12px",border:`1px solid ${C.border}`}}>
+                          <div style={{fontSize:10,letterSpacing:".1em",textTransform:"uppercase",color:C.textMid,marginBottom:4}}>{lbl}</div>
+                          <div style={{fontSize:acc?16:12,fontWeight:acc?700:500,color:gold?C.gold:warn?C.warn:acc?C.accent:C.text,fontVariantNumeric:"tabular-nums"}}>{val}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div style={{display:"flex",gap:8}}>
+                      {!on
+                        ?<button style={{...btn("primary"),flex:1}} onClick={()=>clockIn(emp.id)}>Clock In</button>
+                        :<button style={{...btn("secondary"),flex:1}} onClick={()=>clockOut(emp.id)}>Clock Out + Tips</button>
+                      }
+                      <button style={{...btn("danger"),flex:"0 0 38px"}} onClick={()=>removeEmp(emp.id)} title="Remove">✕</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* ════ SESSION LOG ════ */}
+        {view==="log"&&(
+          <div style={{animation:"fadeIn .3s ease"}}>
+            <div style={secTitle}><span>Session Log</span><div style={line}></div><span>{allLogs.length} entries</span></div>
+            {allLogs.length===0?<div style={empty}>No sessions yet.</div>:(
+              <div style={tblWrap}>
+                <div className="tbl-head log-cols"><span>Employee</span><span>Role</span><span>Date</span><span>In → Out</span><span>Duration</span><span>Tips</span></div>
+                {allLogs.map((log,i)=>(
+                  <div key={i} className="tbl-row log-cols">
+                    <div style={{display:"flex",alignItems:"center",gap:8}}><div style={{width:7,height:7,borderRadius:"50%",background:log.emp.color,flexShrink:0}}></div><span>{log.emp.name}</span></div>
+                    <span style={{color:ROLE_CLR[log.emp.role]||C.textMid,fontWeight:600,fontSize:11}}>{log.emp.role}</span>
+                    <span style={{color:C.textMid}}>{fmtDate(log.start)}</span>
+                    <span style={{color:C.textMid}}>{fmtTime(log.start)} → {fmtTime(log.end)}</span>
+                    <span style={{color:C.accent,fontWeight:600}}>{fmt(log.end-log.start)}</span>
+                    <span style={{color:C.gold,fontWeight:600}}>{log.tips>0?money(log.tips):"—"}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ════ PAYROLL (weekly) ════ */}
+        {view==="payroll"&&(
+          <div style={{animation:"fadeIn .3s ease"}}>
+            <div style={secTitle}><span>Weekly Payroll</span><div style={line}></div><button style={exportBtn} onClick={exportCSV}>⬇ Export CSV</button></div>
+            <div style={tblWrap}>
+              <div className="tbl-head pay-cols"><span>Employee</span><span>Role</span><span>Reg Hrs</span><span>OT Hrs</span><span>Tips</span><span>Total Pay</span></div>
+              {employees.map((emp,i)=>{
+                const ms=weekMs(emp.id); const {reg,ot,regPay,otPay}=payCalc(emp,ms); const tips=totalTips(emp.id);
+                return(
+                  <div key={emp.id} className="tbl-row pay-cols" style={{background:i%2===0?"transparent":"rgba(17,21,24,.5)"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}><div style={{width:7,height:7,borderRadius:"50%",background:emp.color,flexShrink:0}}></div><span>{emp.name}</span></div>
+                    <span style={{color:ROLE_CLR[emp.role]||C.textMid,fontWeight:600,fontSize:11}}>{emp.role}</span>
+                    <span>{reg.toFixed(1)}h</span>
+                    <span style={{color:ot>0?C.warn:C.textMid,fontWeight:ot>0?700:400}}>{ot>0?`${ot.toFixed(1)}h ⚠`:"—"}</span>
+                    <span style={{color:C.gold}}>{tips>0?money(tips):"—"}</span>
+                    <span style={{color:C.accent,fontWeight:700}}>{money(regPay+otPay+tips)}</span>
+                  </div>
+                );
+              })}
+              {/* totals */}
+              <div className="tbl-row pay-cols" style={{borderTop:`2px solid ${C.border}`,background:C.surface,fontWeight:700}}>
+                <span style={{color:C.text}}>TOTAL</span><span></span>
+                <span>{employees.reduce((a,e)=>a+Math.min(toH(weekMs(e.id)),40),0).toFixed(1)}h</span>
+                <span style={{color:C.warn}}>{employees.reduce((a,e)=>a+Math.max(0,toH(weekMs(e.id))-40),0).toFixed(1)}h</span>
+                <span style={{color:C.gold}}>{money(employees.reduce((a,e)=>a+totalTips(e.id),0))}</span>
+                <span style={{color:C.accent}}>{money(employees.reduce((a,e)=>{ const {regPay,otPay}=payCalc(e,weekMs(e.id)); return a+regPay+otPay+totalTips(e.id); },0))}</span>
+              </div>
+            </div>
+            <div style={{fontSize:11,color:C.textMid,marginTop:14,textAlign:"center"}}>Overtime at 1.5× after 40h/week · Based on current week</div>
+          </div>
+        )}
+
+        {/* ════ MONTHLY REPORT ════ */}
+        {view==="monthly"&&(
+          <div style={{animation:"fadeIn .3s ease"}}>
+            <div style={secTitle}>
+              <span>Monthly Report</span><div style={line}></div>
+              <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                <select style={{...selectSt,marginBottom:0,width:"auto",padding:"5px 10px",fontSize:12}}
+                  value={monthSel} onChange={e=>setMonthSel(+e.target.value)}>
+                  {MONTHS.map((m,i)=><option key={m} value={i}>{m}</option>)}
+                </select>
+                <select style={{...selectSt,marginBottom:0,width:"auto",padding:"5px 10px",fontSize:12}}
+                  value={yearSel} onChange={e=>setYearSel(+e.target.value)}>
+                  {[2024,2025,2026,2027].map(y=><option key={y} value={y}>{y}</option>)}
+                </select>
+                <button style={exportBtn} onClick={exportMonthCSV}>⬇ CSV</button>
+              </div>
+            </div>
+            <div style={tblWrap}>
+              <div className="tbl-head month-cols"><span>Employee</span><span>Role</span><span>Hours</span><span>Tips</span><span>Est. Pay</span></div>
+              {employees.map((emp,i)=>{
+                const ms=monthMs(emp.id,monthSel,yearSel);
+                const {reg,ot,regPay,otPay}=payCalc(emp,ms);
+                const tips=monthTips(emp.id,monthSel,yearSel);
+                return(
+                  <div key={emp.id} className="tbl-row month-cols" style={{background:i%2===0?"transparent":"rgba(17,21,24,.5)"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}><div style={{width:7,height:7,borderRadius:"50%",background:emp.color,flexShrink:0}}></div><span>{emp.name}</span></div>
+                    <span style={{color:ROLE_CLR[emp.role]||C.textMid,fontWeight:600,fontSize:11}}>{emp.role}</span>
+                    <span style={{color:C.accent,fontWeight:600}}>{toH(ms).toFixed(1)}h{ot>0?<span style={{color:C.warn}}> (+{ot.toFixed(1)} OT)</span>:""}</span>
+                    <span style={{color:C.gold}}>{tips>0?money(tips):"—"}</span>
+                    <span style={{color:C.text,fontWeight:700}}>{money(regPay+otPay+tips)}</span>
+                  </div>
+                );
+              })}
+              <div className="tbl-row month-cols" style={{borderTop:`2px solid ${C.border}`,background:C.surface,fontWeight:700}}>
+                <span style={{color:C.text}}>TOTAL</span><span></span>
+                <span style={{color:C.accent}}>{employees.reduce((a,e)=>a+toH(monthMs(e.id,monthSel,yearSel)),0).toFixed(1)}h</span>
+                <span style={{color:C.gold}}>{money(employees.reduce((a,e)=>a+monthTips(e.id,monthSel,yearSel),0))}</span>
+                <span style={{color:C.accent}}>{money(employees.reduce((a,e)=>{ const {regPay,otPay}=payCalc(e,monthMs(e.id,monthSel,yearSel)); return a+regPay+otPay+monthTips(e.id,monthSel,yearSel); },0))}</span>
+              </div>
+            </div>
+            <div style={{fontSize:11,color:C.textMid,marginTop:14,textAlign:"center"}}>{MONTHS[monthSel]} {yearSel} · Overtime calculated at 1.5× per weekly period</div>
+          </div>
+        )}
+
+        {/* ════ DAY OFF REQUESTS ════ */}
+        {view==="requests"&&(
+          <div style={{animation:"fadeIn .3s ease"}}>
+            <div style={secTitle}><span>Day Off Requests</span><div style={line}></div><span style={{color:C.textMid}}>{pendingReqs} pending</span></div>
+
+            {/* submit form */}
+            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:22,marginBottom:24}}>
+              <div style={{fontSize:11,letterSpacing:".12em",textTransform:"uppercase",color:C.textMid,marginBottom:16,fontWeight:700}}>New Request</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+                <div>
+                  <label style={label}>Staff Member</label>
+                  <select style={selectSt} value={newReq.empId} onChange={e=>setNewReq(r=>({...r,empId:+e.target.value}))}>
+                    <option value="">Select…</option>
+                    {employees.map(e=><option key={e.id} value={e.id}>{e.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label style={label}>Reason</label>
+                  <input style={inputSt} placeholder="e.g. Personal, Vacation" value={newReq.reason} onChange={e=>setNewReq(r=>({...r,reason:e.target.value}))}/>
+                </div>
+                <div>
+                  <label style={label}>From Date</label>
+                  <input type="date" style={inputSt} value={newReq.from} onChange={e=>setNewReq(r=>({...r,from:e.target.value}))}/>
+                </div>
+                <div>
+                  <label style={label}>To Date</label>
+                  <input type="date" style={inputSt} value={newReq.to} onChange={e=>setNewReq(r=>({...r,to:e.target.value}))}/>
+                </div>
+              </div>
+              <button style={{...btn("blue"),width:"auto",padding:"10px 24px",flex:"none"}} onClick={submitReq}>Submit Request</button>
+            </div>
+
+            {/* requests list */}
+            {requests.length===0?<div style={empty}>No requests yet.</div>:(
+              <div style={tblWrap}>
+                <div className="tbl-head req-cols"><span>Employee</span><span>From</span><span>To</span><span>Reason</span><span>Status</span></div>
+                {[...requests].sort((a,b)=>b.submitted-a.submitted).map(req=>{
+                  const emp=employees.find(e=>e.id===req.empId);
+                  const statusColor=req.status==="approved"?C.accent:req.status==="declined"?C.warn:C.gold;
+                  return(
+                    <div key={req.id} className="tbl-row req-cols">
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
+                        {emp&&<div style={{width:7,height:7,borderRadius:"50%",background:emp.color,flexShrink:0}}></div>}
+                        <span>{emp?emp.name:"Unknown"}</span>
+                      </div>
+                      <span style={{color:C.textMid}}>{req.from}</span>
+                      <span style={{color:C.textMid}}>{req.to}</span>
+                      <span style={{color:C.textMid,fontSize:11}}>{req.reason||"—"}</span>
+                      <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                        <span style={{padding:"2px 8px",borderRadius:20,fontSize:10,fontWeight:700,letterSpacing:".08em",textTransform:"uppercase",background:statusColor+"22",color:statusColor,border:`1px solid ${statusColor}60`}}>{req.status}</span>
+                        {req.status==="pending"&&<>
+                          <button onClick={()=>updateReq(req.id,"approved")} style={{padding:"2px 7px",borderRadius:4,border:"none",cursor:"pointer",fontSize:10,fontWeight:700,background:C.accentDim,color:C.accent,fontFamily:"inherit"}}>✓</button>
+                          <button onClick={()=>updateReq(req.id,"declined")} style={{padding:"2px 7px",borderRadius:4,border:"none",cursor:"pointer",fontSize:10,fontWeight:700,background:C.warnDim,color:C.warn,fontFamily:"inherit"}}>✗</button>
+                        </>}
+                        <button onClick={()=>deleteReq(req.id)} style={{padding:"2px 7px",borderRadius:4,border:"none",cursor:"pointer",fontSize:10,fontWeight:700,background:"transparent",color:C.textMid,fontFamily:"inherit"}}>🗑</button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ════ ADD STAFF ════ */}
+        {view==="add"&&(
+          <div style={{animation:"fadeIn .3s ease"}}>
+            <div style={secTitle}><span>Add Staff Member</span><div style={line}></div></div>
+            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:26,maxWidth:480,margin:"0 auto"}}>
+              <label style={label}>Full Name</label>
+              <input style={inputSt} placeholder="e.g. Jordan Taylor" value={newEmp.name}
+                onChange={e=>setNewEmp(n=>({...n,name:e.target.value}))}
+                onKeyDown={e=>e.key==="Enter"&&addEmp()}/>
+              <label style={label}>Role</label>
+              <select style={selectSt} value={newEmp.role} onChange={e=>setNewEmp(n=>({...n,role:e.target.value}))}>
+                {ROLES.map(r=><option key={r} value={r}>{r}</option>)}
+              </select>
+              <label style={label}>Hourly Rate ($)</label>
+              <input style={inputSt} placeholder="e.g. 14.50" type="number" min="0" step="0.50"
+                value={newEmp.rate} onChange={e=>setNewEmp(n=>({...n,rate:e.target.value}))}
+                onKeyDown={e=>e.key==="Enter"&&addEmp()}/>
+              <button style={{...btn("primary"),width:"100%",padding:"13px 0",fontSize:12}} onClick={addEmp}>Add Staff Member</button>
+            </div>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+function Clock(){
+  const [t,setT]=useState(new Date());
+  useEffect(()=>{ const i=setInterval(()=>setT(new Date()),1000); return ()=>clearInterval(i); },[]);
+  return <span>{t.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit",second:"2-digit"})}</span>;
+}
+
+function LiveTimer({from}){
+  const [el,setEl]=useState(Date.now()-from);
+  useEffect(()=>{ const i=setInterval(()=>setEl(Date.now()-from),1000); return ()=>clearInterval(i); },[from]);
+  const s=Math.floor(el/1000);
+  return <span>{`${Math.floor(s/3600)}h ${String(Math.floor((s%3600)/60)).padStart(2,"0")}m`}</span>;
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
